@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+from sys import argv
+from os import walk, curdir
+from os.path import basename, splitext, join, split
+from collections import OrderedDict
+from math import sqrt
+from numpy import array, compress, not_equal
+from scipy.stats import rankdata, norm
+from balibase import score, BAliBASEIOError, BAliBASERuntimeError
+
+
+def find(filename):
+    for path, dirs, files in walk(curdir, followlinks=True):
+        if filename in files:
+            yield join(path, filename), path
+
+
+def wilcoxon(X, Y):
+    # From: http://www.maths.usyd.edu.au/u/UG/IM/STAT2912/r/WSR-table.pdf
+    distribution = {
+        1: [.5],
+        2: [.25, .5],
+        3: [.125, .25, .375],
+        4: [.0625, .125, .1875, .3125, .4375],
+        5: [.0313, .0625, .0938, .1562, .2187, .3125, .4062, .5],
+        6: [.0156, .0313, .0469, .0781, .1094, .1562, .2187, .2812, .3437,
+            .4219, .5],
+        7: [.0078, .0156, .0234, .0391, .0547, .0781, .1094, .1484, .1875,
+            .2344, .2891, .3437, .4062, .4687],
+        8: [.0039, .0078, .0117, .0195, .0273, .0391, .0547, .0742, .0977,
+            .125, .1562, .1914, .2305, .2734, .3203, .3711, .4219, .4727],
+        9: [.002, .0039, .0059, .0098, .0137, .0195, .0273, .0371, .0488,
+            .0645, .082, .1016, .125, .1504, .1797, .2129, .248, .2852,
+            .3262, .3672, .4102, .4551, .5],
+        10: [.001, .002, .0029, .0049, .0068, .0098, .0137, .0186, .0244,
+             .0322, .042, .0527, .0654, .0801, .0967, .1162, .1377, .1611,
+             .1875, .2158, .2461, .2783, .3125, .3477, .3848, .4229, .4609,
+             .5],
+        11: [.0005, .001, .0015, .0024, .0034, .0049, .0068, .0093, .0122,
+             .0161, .021, .0269, .0337, .0415, .0508, .0615, .0737, .0874,
+             .103, .1201, .1392, .1602, .1826, .2065, .2324, .2598, .2886,
+             .3188, .3501, .3823, .4155, .4492, .4829]
+    }
+
+    D = X - Y
+    D = compress(not_equal(D, 0), D) # Keep all non-zero differences
+    Nr = len(D)
+    R = rankdata(abs(D))
+    R_plus = ((D > 0) * R).sum()
+    R_minus = ((D < 0) * R).sum()
+    W = R_plus - R_minus
+    if Nr <= len(distribution):
+        T = min(R_plus, R_minus)
+        prob = 2 * distribution[Nr][int(T)]
+    else:
+        sigma_W = sqrt(Nr * (Nr + 1) * (2 * Nr + 1) / 6.)
+        z = (W - .5) / sigma_W
+        prob = 2 * norm.sf(abs(z))
+    return W, prob
+
+
+if __name__ == '__main__':
+    if len(argv) <= 1:
+        exit(0)
+
+    reffiles = argv[1:]
+    if not len(reffiles):
+        exit(0)
+
+    results = OrderedDict()
+    tests = {}
+
+    i = 0
+    for reffile in reffiles:
+        (basefilename, reffileext) = splitext(basename(reffile))
+        msffile = basefilename + ".msf"
+        testname = basefilename[:-3]
+
+        test_results = {}
+        for file, path in find(msffile):
+            try:
+                SP, TC = score(reffile, file)
+                result = results.setdefault(path, [[], []])
+                result[0].append(SP)
+                result[1].append(TC)
+                print "%s: SP=%f, TC=%f" % (file, SP, TC)
+                test_results[path] = 1
+            except BAliBASEIOError as e:
+                print "MISSING:", e
+            except BAliBASERuntimeError as e:
+                print "ERROR:", e
+
+        # blank line
+        print
+
+        if len(test_results) < len(results):
+            for path in test_results.iterkeys():
+                result = results[path]
+                result[0].pop()
+                result[1].pop()
+            continue
+
+        elif len(test_results) > len(results):
+            results = OrderedDict()
+            tests = {}
+            i = 0
+
+        test = tests.setdefault(testname, [])
+        test.append(i)
+        all_tests = tests.setdefault("TOTAL", [])
+        all_tests.append(i)
+        i += 1
+
+    for test in tests.keys():
+        tests[test] = array(tests[test])
+
+    for path, scores in results.iteritems():
+        scores[0] = array(scores[0])
+        scores[1] = array(scores[1])
+
+    def output_total(title, path, SPs, TCs):
+        SP_total = sum(SPs)
+        TC_total = sum(TCs)
+        count = len(SPs)
+        if count:
+            print "%s (%d) %s: SP=%f, TC=%f" % (title, count, path, SP_total / count, TC_total / count)
+
+    sorted_tests = list(sorted(tests.keys()))
+
+    for test in sorted_tests:
+        indices = tests[test]
+
+        for path, (SPs, TCs) in results.iteritems():
+            SPs = SPs[indices]
+            TCs = TCs[indices]
+            output_total(test, path, SPs, TCs)
+
+        # blank line
+        print
+
+    sorted_paths = list(sorted(results.keys()))
+    sorted_msarc = [path for path in sorted_paths if "msarc" in path or path is "."]
+    sorted_other = [path for path in sorted_paths if "msarc" not in path and path is not "."]
+    sorted_paths = sorted_msarc + sorted_other
+
+    max_path_len = max(len(split(path)[-1]) for path in sorted_paths)
+    print "%s\t%s" % (" " * max_path_len, "\t".join("%s (%d)" % (test, len(tests[test])) for test in sorted_tests))
+    for path in sorted_paths:
+        SPs, TCs = results[path]
+        path = split(path)[-1]
+        scores = [path + " " * (max_path_len - len(path))]
+        for test in sorted_tests:
+            indices = tests[test]
+            SP_total = sum(SPs[indices])
+            TC_total = sum(TCs[indices])
+            count = len(indices)
+            scores.append("%.1f/%.1f" % (round(SP_total * 100 / count, 1),
+                                         round(TC_total * 100 / count, 1)))
+        print "\t".join(scores)
+    print
+
+    for path1 in sorted_msarc:
+        for type_index, type_name in enumerate(("SP", "TC")):
+            scores1 = results[path1][type_index]
+
+            title = "%s %s" % (split(path1)[-1], type_name)
+            print "%s\t%s" % (title + " " * (max_path_len - len(title)),
+                              "\t".join("%s (%d)" % (test, len(tests[test])) for test in sorted_tests))
+            for path2 in sorted_other:
+                scores2 = results[path2][type_index]
+                path2 = split(path2)[-1]
+
+                pvalues = [path2 + " " * (max_path_len - len(path2))]
+                for test in sorted_tests:
+                    indices = tests[test]
+
+                    mean_diff = (scores1[indices] - scores2[indices]).sum() / len(indices)
+                    stat, pval = wilcoxon(scores1[indices], scores2[indices])
+                    if pval > 0.05:
+                        pval = "(%#.2g)" % pval
+                    else:
+                        pval = "%#.2g" % pval
+                    pval = pval.replace("-0", "-")
+                    pval = "%s%s" % ("+" if mean_diff >= 0 else "-", pval)
+                    pvalues.append(pval + " " * (max_path_len - len(pval)))
+
+                print "\t".join(pvalues)
+            print

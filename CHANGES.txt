@@ -1,0 +1,15 @@
+===============
+MSARC Changelog
+===============
+
+1.2  (2015-09-16)
+=================
+
+* Updated to support multiprocessing to accelerate calculations. 
+* Removed batch-msarc. 
+
+1.1  (2013-12-01)
+=================
+
+* Added option for weighting sequence pairs in consistency transformation.
+

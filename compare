@@ -1,0 +1,35 @@
+#!/usr/bin/env python
+from os import walk, curdir
+from os.path import isfile, basename, splitext, join
+from clusteralign.options import parse
+from clusteralign.alignment import Alignment
+
+
+def find(filename):
+    for path, dirs, files in walk(curdir, followlinks=True):
+        if filename in files:
+            yield join(path, filename)
+
+def run(basefile, args, error):
+    if not isfile(basefile):
+        error("no such file: %s" % basefile)
+
+    (basefilename, basefileext) = splitext(basename(basefile))
+    msffile = basefilename + ".msf"
+
+    a = Alignment(basefile, **args)
+
+    for file in find(msffile):
+        a.read(file)
+        print file, "SCORE:", a.value
+    print
+
+if __name__ == '__main__':
+    args, error = parse("+")
+
+    files = args.files
+    del args.files
+    args = vars(args)
+
+    for file in files:
+        run(file, args, error)

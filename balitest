@@ -1,0 +1,32 @@
+#!/usr/bin/env python
+from sys import argv
+from os.path import basename, splitext
+from balibase import score, BAliBASEIOError, BAliBASERuntimeError
+
+
+if __name__ == '__main__':
+    if len(argv) <= 1:
+        exit(0)
+
+    reffiles = argv[1:]
+    SP_total = 0.
+    TC_total = 0.
+    count = 0
+
+    for reffile in reffiles:
+        (basefilename, reffileext) = splitext(basename(reffile))
+        msffile = basefilename + ".msf"
+
+        try:
+            SP, TC = score(reffile, msffile)
+            SP_total += SP
+            TC_total += TC
+            count += 1
+            print "%s: SP=%f, TC=%f" % (msffile, SP, TC)
+        except BAliBASEIOError as e:
+            print "MISSING:", e
+        except BAliBASERuntimeError as e:
+            print "ERROR:", e
+
+    if count and len(reffiles) > 1:
+        print "TOTAL: SP=%f, TC=%f" % (SP_total / count, TC_total / count)
